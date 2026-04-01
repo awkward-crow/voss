@@ -1,1 +1,3 @@
 c/build
+zig/voss/zig-out
+zig/voss/.zig-cache

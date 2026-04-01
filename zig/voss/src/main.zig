@@ -21,31 +21,23 @@ pub fn main() !void {
     try stdout.print("s is {s}\n", .{s});
 
     var t: @Vector(n, u8) = s.*;
-
     const upper = (A <= t) & (t <= Z);
     t |= @select(u8, upper, d, zero);
     const alpha = (a <= t) & (t <= z);
+    var q: u8 = 0;
 
-    var p: u8 = @reduce(.Min, @select(u8, alpha, indices, nulls));
-    try stdout.print("p_0 is {d}\n", .{p});
+    while (true) {
+        const q_v: @Vector(n, u8) = @splat(@as(u8, q));
+        const p: u8 = @reduce(.Min, @select(u8, alpha & (q_v <= indices), indices, nulls));
+        if (p == n) break;
+        try stdout.print("p is {d}\n", .{p});
 
-    var p_v: @Vector(n, u8) = @splat(@as(u8, p));
-    var rho = @select(u8, (~alpha) & (p_v < indices), indices, nulls);
-    var q = @reduce(.Min, rho);
-    try stdout.print("q is {d}\n", .{q});
+        const p_v: @Vector(n, u8) = @splat(@as(u8, p));
+        q = @reduce(.Min, @select(u8, (~alpha) & (p_v < indices), indices, nulls));
+        try stdout.print("q is {d}\n", .{q});
 
-    try stdout.print("{s}\n", .{@as([n]u8, t)[p..q]});
-
-    const q_v: @Vector(n, u8) = @splat(@as(u8, q));
-    p = @reduce(.Min, @select(u8, alpha & (q_v <= indices), indices, nulls));
-    try stdout.print("p_1 is {d}\n", .{p});
-
-    p_v = @splat(@as(u8, p));
-    rho = @select(u8, (~alpha) & (p_v < indices), indices, nulls);
-    q = @reduce(.Min, rho);
-    try stdout.print("q_1 is {d}\n", .{q});
-
-    try stdout.print("{s}\n", .{@as([n]u8, t)[p..q]});
+        try stdout.print("{s}\n", .{@as([n]u8, t)[p..q]});
+    }
 
     try stdout.print("ok\n", .{});
     try stdout.flush();

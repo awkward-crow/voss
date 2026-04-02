@@ -22,7 +22,7 @@ const C = struct {
 
 pub fn main() !void {
     var collector = C{};
-    const n = 16;
+    const n = 32;
 
     const A: @Vector(n, u8) = @splat(@as(u8, 'A'));
     const Z: @Vector(n, u8) = @splat(@as(u8, 'Z'));
@@ -33,8 +33,10 @@ pub fn main() !void {
     const indices = std.simd.iota(u8, n);
     const nulls: @Vector(n, u8) = @splat(@as(u8, n));
 
-    const s = "_EAt my $hortZ at *THE* breakfast  T bar bar Bar baR!";
-    try stdout.print("{s}\n", .{s});
+    // const s = "_EAt my $hortZ at *THE* breakfast  T bar bar Bar baR!";
+    // try stdout.print("{s}\n", .{s});
+    const s = @embedFile("pride-and-prejudice.txt");
+    try stdout.print("{s}\n", .{s[0..1024]});
 
     var i: usize = 0;
     var t: @Vector(n, u8) = s[i..][0..n].*;
@@ -89,7 +91,7 @@ pub fn main() !void {
         try collector.put(@as([n]u8, t)[p..q]);
     }
 
-    try stdout.print("\ntail is {s}\n", .{s[i..]});
+    try collector.put(s[i..]);
 
     try stdout.print("ok\n", .{});
     try stdout.flush();

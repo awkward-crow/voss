@@ -17,7 +17,7 @@ pub fn main() !void {
     const indices = std.simd.iota(u8, n);
     const nulls: @Vector(n, u8) = @splat(@as(u8, n));
 
-    const s = "_EAt my $hortZ.. at *THE* breakfasT bar!";
+    const s = "_EAt my $hortZ. at *THE* breakfast  T bar bar Bar baR!";
     try stdout.print("s is {s}\n", .{s});
 
     var i: usize = 0;
@@ -48,14 +48,37 @@ pub fn main() !void {
                 }
             }
         }
-        try stdout.print("p is {d}\n", .{p});
+        //         try stdout.print("p is {d}\n", .{p});
 
-        const p_v: @Vector(n, u8) = @splat(@as(u8, p));
-        q = @reduce(.Min, @select(u8, (~alpha) & (p_v < indices), indices, nulls));
-        try stdout.print("q is {d}\n", .{q});
+        find_q: while (true) {
+            const p_v: @Vector(n, u8) = @splat(@as(u8, p));
+            q = @reduce(.Min, @select(u8, (~alpha) & (p_v <= indices), indices, nulls));
+            if (q < n) {
+                break :find_q;
+            } else {
+                // q == n i.e. we have hit the end of the vector t
+                i += n;
+                if (i + n <= s.len) {
+                    // do something with what we have found so far ...
+                    try stdout.print("{s}", .{@as([n]u8, t)[p..q]});
+                    t = s[i..][0..n].*;
+                    upper = (A <= t) & (t <= Z);
+                    t |= @select(u8, upper, d, zero);
+                    alpha = (a <= t) & (t <= z);
+                    p = 0;
+                } else {
+                    // do something with what we have found so far ...
+                    try stdout.print("{s}", .{@as([n]u8, t)[p..q]});
+                    break :outer;
+                }
+            }
+        }
+        //         try stdout.print("q is {d}\n", .{q});
 
         try stdout.print("{s}\n", .{@as([n]u8, t)[p..q]});
     }
+
+    try stdout.print("\ntail is {s}\n", .{s[i..]});
 
     try stdout.print("ok\n", .{});
     try stdout.flush();

@@ -1,11 +1,27 @@
 const std = @import("std");
 const voss = @import("voss");
 
-pub fn main() !void {
-    var stdout_buffer: [1024]u8 = undefined;
-    var stdout_writer = std.fs.File.stdout().writer(&stdout_buffer);
-    const stdout = &stdout_writer.interface;
+var stdout_buffer: [1024]u8 = undefined;
+var stdout_writer = std.fs.File.stdout().writer(&stdout_buffer);
+const stdout = &stdout_writer.interface;
 
+const C = struct {
+    buf: [256]u8 = undefined,
+    k: usize = 0,
+
+    pub fn add(self: *C, s: []const u8) !void {
+        @memcpy(self.buf[self.k..][0..s.len], s);
+        self.k += s.len;
+    }
+
+    pub fn put(self: *C, s: []const u8) !void {
+        try stdout.print("{s}{s}\n", .{ self.buf[0..self.k], s });
+        self.k = 0;
+    }
+};
+
+pub fn main() !void {
+    var collector = C{};
     const n = 16;
 
     const A: @Vector(n, u8) = @splat(@as(u8, 'A'));
@@ -17,8 +33,8 @@ pub fn main() !void {
     const indices = std.simd.iota(u8, n);
     const nulls: @Vector(n, u8) = @splat(@as(u8, n));
 
-    const s = "_EAt my $hortZ. at *THE* breakfast  T bar bar Bar baR!";
-    try stdout.print("s is {s}\n", .{s});
+    const s = "_EAt my $hortZ at *THE* breakfast  T bar bar Bar baR!";
+    try stdout.print("{s}\n", .{s});
 
     var i: usize = 0;
     var t: @Vector(n, u8) = s[i..][0..n].*;
@@ -48,7 +64,6 @@ pub fn main() !void {
                 }
             }
         }
-        //         try stdout.print("p is {d}\n", .{p});
 
         find_q: while (true) {
             const p_v: @Vector(n, u8) = @splat(@as(u8, p));
@@ -57,25 +72,21 @@ pub fn main() !void {
                 break :find_q;
             } else {
                 // q == n i.e. we have hit the end of the vector t
+                try collector.add(@as([n]u8, t)[p..q]);
                 i += n;
                 if (i + n <= s.len) {
-                    // do something with what we have found so far ...
-                    try stdout.print("{s}", .{@as([n]u8, t)[p..q]});
                     t = s[i..][0..n].*;
                     upper = (A <= t) & (t <= Z);
                     t |= @select(u8, upper, d, zero);
                     alpha = (a <= t) & (t <= z);
                     p = 0;
                 } else {
-                    // do something with what we have found so far ...
-                    try stdout.print("{s}", .{@as([n]u8, t)[p..q]});
                     break :outer;
                 }
             }
         }
-        //         try stdout.print("q is {d}\n", .{q});
 
-        try stdout.print("{s}\n", .{@as([n]u8, t)[p..q]});
+        try collector.put(@as([n]u8, t)[p..q]);
     }
 
     try stdout.print("\ntail is {s}\n", .{s[i..]});

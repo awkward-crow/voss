@@ -29,14 +29,13 @@ pub fn main() !void {
     var q: u8 = 0;
 
     outer: while (true) {
-        var finding_p = true;
-        while (finding_p) {
+        find_p: while (true) {
             const q_v: @Vector(n, u8) = @splat(@as(u8, q));
             p = @reduce(.Min, @select(u8, alpha & (q_v <= indices), indices, nulls));
             if (p < n) {
-                finding_p = false;
-            }
-            if (p == n) {
+                break :find_p;
+            } else {
+                // p == n i.e. we have hit the end of the vector t
                 i += n;
                 if (i + n <= s.len) {
                     t = s[i..][0..n].*;

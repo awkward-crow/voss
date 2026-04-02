@@ -17,19 +17,38 @@ pub fn main() !void {
     const indices = std.simd.iota(u8, n);
     const nulls: @Vector(n, u8) = @splat(@as(u8, n));
 
-    const s = "_EAt my $hortZ..";
+    const s = "_EAt my $hortZ.. at *THE* breakfasT bar!";
     try stdout.print("s is {s}\n", .{s});
 
-    var t: @Vector(n, u8) = s.*;
-    const upper = (A <= t) & (t <= Z);
+    var i: usize = 0;
+    var t: @Vector(n, u8) = s[i..][0..n].*;
+    var upper = (A <= t) & (t <= Z);
     t |= @select(u8, upper, d, zero);
-    const alpha = (a <= t) & (t <= z);
+    var alpha = (a <= t) & (t <= z);
+    var p: u8 = 0;
     var q: u8 = 0;
 
-    while (true) {
-        const q_v: @Vector(n, u8) = @splat(@as(u8, q));
-        const p: u8 = @reduce(.Min, @select(u8, alpha & (q_v <= indices), indices, nulls));
-        if (p == n) break;
+    outer: while (true) {
+        var finding_p = true;
+        while (finding_p) {
+            const q_v: @Vector(n, u8) = @splat(@as(u8, q));
+            p = @reduce(.Min, @select(u8, alpha & (q_v <= indices), indices, nulls));
+            if (p < n) {
+                finding_p = false;
+            }
+            if (p == n) {
+                i += n;
+                if (i + n <= s.len) {
+                    t = s[i..][0..n].*;
+                    upper = (A <= t) & (t <= Z);
+                    t |= @select(u8, upper, d, zero);
+                    alpha = (a <= t) & (t <= z);
+                    q = 0;
+                } else {
+                    break :outer;
+                }
+            }
+        }
         try stdout.print("p is {d}\n", .{p});
 
         const p_v: @Vector(n, u8) = @splat(@as(u8, p));

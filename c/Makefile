@@ -6,6 +6,7 @@ TARGET  = $(BUILD)/voss
 SRCS = src/voss_sse2.c \
        src/voss_avx2.c \
        src/voss_dispatch.c \
+       src/hashmap.c \
        src/main.c
 
 OBJS = $(SRCS:src/%.c=$(BUILD)/%.o)

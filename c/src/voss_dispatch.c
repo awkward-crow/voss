@@ -17,8 +17,8 @@ void voss_normalize(const char *src, char *dst, size_t len)
 /*
  * voss_tokenize -- scalar walk over a normalized buffer.
  *
- * Alphanumeric bytes are non-zero; separators are 0.
- * Produces token spans as (pointer, length) pairs.
+ * alphanumeric bytes are non-zero; separators are 0.
+ * produces token spans as (pointer, length) pairs.
  */
 size_t voss_tokenize(const char *buf, size_t len,
                      voss_token_t *tokens, size_t cap)
@@ -27,11 +27,11 @@ size_t voss_tokenize(const char *buf, size_t len,
     size_t i = 0;
 
     while (i < len && n < cap) {
-        /* Skip separator (zero) bytes. */
+        /* skip separator (zero) bytes. */
         while (i < len && buf[i] == '\0') i++;
         if (i >= len) break;
 
-        /* Capture the run of alnum bytes. */
+        /* capture the run of alnum bytes. */
         const char *start = buf + i;
         while (i < len && buf[i] != '\0') i++;
 

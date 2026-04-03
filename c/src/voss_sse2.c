@@ -46,7 +46,7 @@ void voss_normalize_sse2(const char *src, char *dst, size_t len)
                          _mm_and_si128(chunk, is_alnum));
     }
 
-    /* Scalar tail for remaining < 16 bytes. */
+    /* scalar tail for remaining < 16 bytes. */
     for (; i < len; i++) {
         unsigned char c = (unsigned char)src[i];
         if (c >= 'A' && c <= 'Z') c |= 0x20;

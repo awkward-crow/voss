@@ -37,6 +37,6 @@ void voss_normalize_avx2(const char *src, char *dst, size_t len)
                             _mm256_and_si256(chunk, is_alnum));
     }
 
-    /* Fall through remaining bytes with the SSE2 kernel. */
+    /* fall through remaining bytes with the SSE2 kernel. */
     voss_normalize_sse2(src + i, dst + i, len - i);
 }

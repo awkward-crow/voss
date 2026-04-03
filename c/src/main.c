@@ -1,55 +1,171 @@
 #include "voss.h"
+#include "hashmap.h"
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
+#include <sys/stat.h>
 
-#define MAX_TOKENS 4096
+typedef struct {
+    const char *key;
+    size_t      klen;
+    int         count;
+} entry_t;
+
+static int cmp_asc(const void *a, const void *b)
+{
+    int ca = ((const entry_t *)a)->count;
+    int cb = ((const entry_t *)b)->count;
+    return (ca > cb) - (ca < cb);
+}
+
+static int cmp_desc(const void *a, const void *b)
+{
+    return cmp_asc(b, a);
+}
+
+static void sift_down(entry_t *h, size_t n, size_t i)
+{
+    while (1) {
+        size_t m = i, l = 2*i + 1, r = 2*i + 2;
+        if (l < n && h[l].count < h[m].count) m = l;
+        if (r < n && h[r].count < h[m].count) m = r;
+        if (m == i) break;
+        entry_t tmp = h[i]; h[i] = h[m]; h[m] = tmp;
+        i = m;
+    }
+}
 
 static void usage(const char *argv0)
 {
-    fprintf(stderr, "usage: %s [--sse2 | --avx2]\n", argv0);
+    fprintf(stderr, "usage: %s <file>\n", argv0);
 }
 
 int main(int argc, char **argv)
 {
-    void (*normalize)(const char *, char *, size_t) = voss_normalize;
-    const char *isa = "auto";
+    if (argc != 2) { usage(argv[0]); return 1; }
 
-    if (argc == 2) {
-        if (strcmp(argv[1], "--sse2") == 0) {
-            normalize = voss_normalize_sse2;
-            isa = "sse2";
-        } else if (strcmp(argv[1], "--avx2") == 0) {
-            normalize = voss_normalize_avx2;
-            isa = "avx2";
+    const char *isa = __builtin_cpu_supports("avx2") ? "avx2" : "sse2";
+    fprintf(stderr, "isa    : %s\n", isa);
+
+    struct stat st;
+    if (stat(argv[1], &st) != 0) { perror(argv[1]); return 1; }
+    size_t len = (size_t)st.st_size;
+    fprintf(stderr, "file   : %s (%zu bytes)\n", argv[1], len);
+
+    FILE *f = fopen(argv[1], "rb");
+    if (!f) { perror(argv[1]); return 1; }
+
+    char *input = malloc(len);
+    if (!input) { perror("malloc"); fclose(f); return 1; }
+    if (fread(input, 1, len, f) != len) {
+        fprintf(stderr, "read error\n"); fclose(f); free(input); return 1;
+    }
+    fclose(f);
+
+    char *buf = malloc(len);
+    if (!buf) { perror("malloc"); free(input); return 1; }
+
+    voss_normalize(input, buf, len);
+
+    /* theoretical max: every other byte is alnum, giving (len+1)/2 tokens. */
+    size_t max_tokens = len / 2 + 1;
+    voss_token_t *tokens = malloc(max_tokens * sizeof *tokens);
+    if (!tokens) { perror("malloc"); free(buf); free(input); return 1; }
+
+    size_t n = voss_tokenize(buf, len, tokens, max_tokens);
+    fprintf(stderr, "tokens : %zu  (max_tokens=%zu)\n", n, max_tokens);
+
+    /* load stop words from a comma-separated file. */
+    hashmap_t stop = {0};
+    char *stop_buf = NULL;
+    struct stat sst;
+    if (stat("../stop_words.txt", &sst) == 0) {
+        FILE *sf = fopen("../stop_words.txt", "rb");
+        if (!sf) {
+            perror("../stop_words.txt"); free(buf); free(input); return 1;
         } else {
-            usage(argv[0]);
-            return 1;
+            stop_buf = malloc(sst.st_size);
+            if (stop_buf && fread(stop_buf, 1, sst.st_size, sf) == (size_t)sst.st_size) {
+                /* count commas to estimate word count for hashmap sizing. */
+                size_t ncommas = 0;
+                for (size_t i = 0; i < (size_t)sst.st_size; i++)
+                    if (stop_buf[i] == ',') ncommas++;
+                hashmap_init(&stop, (ncommas + 1 + 26) * 2); /* +26 for single letters a-z */
+                const char *p = stop_buf, *end = stop_buf + sst.st_size;
+                while (p < end) {
+                    const char *q = p;
+                    while (q < end && *q != ',') q++;
+                    if (q > p) hashmap_increment(&stop, p, (size_t)(q - p));
+                    p = q + 1;
+                }
+                static const char alpha[] = "abcdefghijklmnopqrstuvwxyz";
+                for (size_t j = 0; j < 26; j++)
+                    hashmap_increment(&stop, alpha + j, 1);
+                fprintf(stderr, "stop   : %zu words\n", stop.used);
+                for (size_t j = 0; j < stop.cap; j++)
+                    if (stop.occupied[j])
+                        fprintf(stderr, "  %.*s\n", (int)stop.klens[j], stop.keys[j]);
+            }
+            fclose(sf);
         }
-    } else if (argc != 1) {
-        usage(argv[0]);
-        return 1;
+    } else {
+        fprintf(stderr, "stop   : ../stop_words.txt not found\n");
+        free(buf); free(input); return 1;
     }
 
-    const char *input =
-        "Hello, World! This is a TEST of SIMD string-processing: "
-        "foo123 BAR_baz   UPPER lower 42things end.";
+    hashmap_t m;
+    if (hashmap_init(&m, n * 2) != 0) {
+        fprintf(stderr, "hashmap_init failed\n");
+        free(tokens); free(buf); free(input); return 1;
+    }
+    for (size_t i = 0; i < n; i++) {
+        if (hashmap_contains(&stop, tokens[i].ptr, tokens[i].len)) continue;
+        hashmap_increment(&m, tokens[i].ptr, tokens[i].len);
+    }
+    fprintf(stderr, "unique : %zu\n", m.used);
 
-    size_t len = strlen(input);
-    char  *buf = malloc(len);
-    if (!buf) { perror("malloc"); return 1; }
+    hashmap_stats_t hst;
+    hashmap_stats(&m, &hst);
+    fprintf(stderr, "load   : %.2f\n",    hst.load_factor);
+    fprintf(stderr, "probe  : max=%zu mean=%.2f\n", hst.max_probe, hst.mean_probe);
+    fprintf(stderr, "runs   : max=%zu mean=%.2f\n", hst.max_run,   hst.mean_run);
+    fprintf(stderr, "hist   : ");
+    for (size_t i = 0; i < 5; i++)
+        fprintf(stderr, "[%zu]=%zu ", i, hst.hist[i]);
+    fprintf(stderr, "[5+]=%zu\n", hst.hist[5]);
 
-    normalize(input, buf, len);
+    free(tokens);
 
-    voss_token_t tokens[MAX_TOKENS];
-    size_t n = voss_tokenize(buf, len, tokens, MAX_TOKENS);
+    size_t k = 25;
+    size_t hlen = 0;
+    entry_t *heap = malloc(k * sizeof *heap);
+    if (!heap) {
+        perror("malloc"); hashmap_free(&m); free(buf); free(input); return 1;
+    }
 
-    printf("isa    : %s\n", isa);
-    printf("input  : %s\n", input);
-    printf("tokens : %zu\n\n", n);
-    for (size_t i = 0; i < n; i++)
-        printf("  [%2zu] %.*s\n", i, (int)tokens[i].len, tokens[i].ptr);
+    for (size_t i = 0; i < m.cap; i++) {
+        if (!m.occupied[i]) continue;
+        entry_t e = { m.keys[i], m.klens[i], m.counts[i] };
+        if (hlen < k) {
+            heap[hlen++] = e;
+            /* once the heap is full, arrange it as a min-heap. */
+            if (hlen == k)
+                for (size_t j = k / 2; j-- > 0; ) sift_down(heap, k, j);
+        } else if (e.count > heap[0].count) {
+            heap[0] = e;
+            sift_down(heap, k, 0);
+        }
+    }
 
+    qsort(heap, hlen, sizeof *heap, cmp_desc);
+
+    for (size_t i = 0; i < hlen; i++)
+        printf("%6d  %.*s\n", heap[i].count, (int)heap[i].klen, heap[i].key);
+
+    free(heap);
+    hashmap_free(&m);
+    hashmap_free(&stop);
+    free(stop_buf);
     free(buf);
+    free(input);
     return 0;
 }

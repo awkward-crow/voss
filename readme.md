@@ -1,8 +1,14 @@
 # voss -- vector string processing
 
+
 ## dir. `zig`
 
 ### latest
+ - word frequency hashmap: collector's `put` method counts tokens into a `StringHashMap(u32)`, with duped keys; map lifetime managed in `main`
+ - stop words filtering: embed `stop_words.txt`, parse at startup into a `StringHashMap(void)`; single-letter words also excluded
+ - hashmaps passed to collector as pointers (borrowed, not owned)
+
+### previous
  - embed pride-and-prejudice.txt
  - a collector that accumulates alpha sequences across the end of the vector
  - reload vector while looking for end of alpha sequence i.e. finding q
@@ -19,6 +25,50 @@ Try,
 cd zig/voss
 zig build run
 ```
+
+Or,
+
+```sh
+zig build run --release=fast
+./zig-out/bin/voss 
+
+### ownership vs borrowing
+
+Zig has no borrow checker, but the same distinction matters and is expressed through
+conventions rather than language rules.
+
+**Ownership** — the struct initialises the resource itself and is responsible for
+freeing it. The canonical example is `std.ArrayList`:
+
+```zig
+var list = std.ArrayList(u8).init(allocator);
+defer list.deinit();
+```
+
+`init` stores the allocator and allocates nothing yet; subsequent operations
+allocate through it; `deinit` frees everything. The caller never touches the
+internal buffer directly. Passing `allocator` by value is idiomatic because
+`std.mem.Allocator` is already a fat pointer (ptr + vtable), so copying it is
+cheap and correct.
+
+**Borrowing** — the struct holds a pointer to a resource that someone else owns
+and will free. The pointer signals "I did not allocate this and I will not free
+it." In this codebase the collector borrows the word-count map and stop-words map:
+
+```zig
+map: *std.StringHashMap(u32),
+stop_words: *std.StringHashMap(void),
+```
+
+Both maps are declared, initialised, and deferred-deinit'd in `main`; the
+collector receives pointers and uses them without any cleanup responsibility.
+This also means `main` can inspect or iterate the map directly after the
+tokenisation loop, without going through the collector.
+
+The practical rule: if a struct calls `init` on something, it should call
+`deinit` on it too (own it). If it receives something already initialised,
+it should hold a pointer and leave cleanup to the caller (borrow it).
+
 
 ## dir. `c`
 

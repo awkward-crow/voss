@@ -69,9 +69,6 @@ pub fn main() !void {
     const zero: @Vector(n, u8) = @splat(@as(u8, 0));
     const a: @Vector(n, u8) = @splat(@as(u8, 'a'));
     const z: @Vector(n, u8) = @splat(@as(u8, 'z'));
-    const indices = std.simd.iota(u8, n);
-    const nulls: @Vector(n, u8) = @splat(@as(u8, n));
-
     const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);
     if (args.len < 2) return error.MissingArgument;
@@ -82,60 +79,45 @@ pub fn main() !void {
     defer allocator.free(s);
 
     var i: usize = 0;
-    var t: @Vector(n, u8) = s[i..][0..n].*;
-    var upper = (A <= t) & (t <= Z);
-    t |= @select(u8, upper, d, zero);
-    var alpha = (a <= t) & (t <= z);
-    var p: u8 = 0;
-    var q: u8 = 0;
+    var prev_bit: u32 = 0;
 
-    outer: while (true) {
-        find_p: while (true) {
-            const q_v: @Vector(n, u8) = @splat(@as(u8, q));
-            p = @reduce(.Min, @select(u8, alpha & (q_v <= indices), indices, nulls));
-            if (p < n) {
-                break :find_p;
+    while (i + n <= s.len) : (i += n) {
+        var t: @Vector(n, u8) = s[i..][0..n].*;
+        const upper = (A <= t) & (t <= Z);
+        t |= @select(u8, upper, d, zero);
+        const alpha = (a <= t) & (t <= z);
+        const mask: u32 = @bitCast(alpha);
+        const shifted = (mask << 1) | prev_bit;
+        var starts = mask & ~shifted;
+        var ends   = ~mask & shifted;
+        const tb: [n]u8 = t;  // lowercased bytes
+
+        // if mid-word from previous chunk, finalize or extend
+        if (prev_bit == 1) {
+            if (ends != 0) {
+                const q: usize = @ctz(ends);
+                ends &= ends - 1;
+                try collector.put(tb[0..q]);
             } else {
-                // p == n i.e. we have hit the end of the vector t
-                i += n;
-                if (i + n <= s.len) {
-                    t = s[i..][0..n].*;
-                    upper = (A <= t) & (t <= Z);
-                    t |= @select(u8, upper, d, zero);
-                    alpha = (a <= t) & (t <= z);
-                    q = 0;
-                } else {
-                    break :outer;
-                }
+                try collector.add(tb[0..n]);
             }
         }
 
-        find_q: while (true) {
-            const p_v: @Vector(n, u8) = @splat(@as(u8, p));
-            q = @reduce(.Min, @select(u8, (~alpha) & (p_v <= indices), indices, nulls));
-            if (q < n) {
-                break :find_q;
+        // process remaining words in this chunk
+        while (starts != 0) {
+            const p: usize = @ctz(starts);
+            starts &= starts - 1;
+            if (ends != 0) {
+                const q: usize = @ctz(ends);
+                ends &= ends - 1;
+                try collector.put(tb[p..q]);
             } else {
-                // q == n i.e. we have hit the end of the vector t
-                try collector.add(@as([n]u8, t)[p..q]);
-                i += n;
-                if (i + n <= s.len) {
-                    t = s[i..][0..n].*;
-                    upper = (A <= t) & (t <= Z);
-                    t |= @select(u8, upper, d, zero);
-                    alpha = (a <= t) & (t <= z);
-                    p = 0;
-                } else {
-                    break :outer;
-                }
+                try collector.add(tb[p..n]);
             }
         }
 
-        try collector.put(@as([n]u8, t)[p..q]);
+        prev_bit = (mask >> 31) & 1;
     }
-
-    // try collector.put(s[i..]);
-    // try stdout.print("tail is {s}\n", .{s[i..]});
 
     const k = 25;
     const Entry = struct { key: []const u8, count: u32 };

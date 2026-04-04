@@ -1,5 +1,5 @@
 CC      = gcc
-CFLAGS  = -std=c11 -O2 -Wall -Wextra -Iinclude
+CFLAGS  = -std=c11 -O3 -march=native -Wall -Wextra -Iinclude
 BUILD   = build
 TARGET  = $(BUILD)/voss
 
@@ -31,7 +31,7 @@ $(BUILD)/%.o: src/%.c | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(TARGET): $(OBJS)
-	$(CC) $^ -o $@
+	$(CC) $^ -o $@ -lm
 
 tidy:
 	rm -f $(BUILD)/*.o

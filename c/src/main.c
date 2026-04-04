@@ -1,5 +1,6 @@
 #include "voss.h"
 #include "hashmap.h"
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/stat.h>
@@ -66,13 +67,15 @@ int main(int argc, char **argv)
 
     voss_normalize(input, buf, len);
 
-    /* theoretical max: every other byte is alnum, giving (len+1)/2 tokens. */
-    size_t max_tokens = len / 2 + 1;
-    voss_token_t *tokens = malloc(max_tokens * sizeof *tokens);
-    if (!tokens) { perror("malloc"); free(buf); free(input); return 1; }
-
-    size_t n = voss_tokenize(buf, len, tokens, max_tokens);
-    fprintf(stderr, "tokens : %zu  (max_tokens=%zu)\n", n, max_tokens);
+    size_t n = 0;
+    {
+        int in_token = 0;
+        for (size_t i = 0; i < len; i++) {
+            if (buf[i] != '\0') { if (!in_token) { n++; in_token = 1; } }
+            else in_token = 0;
+        }
+    }
+    fprintf(stderr, "tokens : %zu\n", n);
 
     /* load stop words from a comma-separated file. */
     hashmap_t stop = {0};
@@ -101,9 +104,6 @@ int main(int argc, char **argv)
                 for (size_t j = 0; j < 26; j++)
                     hashmap_increment(&stop, alpha + j, 1);
                 fprintf(stderr, "stop   : %zu words\n", stop.used);
-                for (size_t j = 0; j < stop.cap; j++)
-                    if (stop.occupied[j])
-                        fprintf(stderr, "  %.*s\n", (int)stop.klens[j], stop.keys[j]);
             }
             fclose(sf);
         }
@@ -112,14 +112,27 @@ int main(int argc, char **argv)
         free(buf); free(input); return 1;
     }
 
+    /* Heaps' law: unique word count ≈ K * n^beta, K≈10, beta≈0.7 for
+     * English.  Floor at 1024 for small inputs. */
+    size_t cap_hint = (size_t)(10.0 * pow((double)n, 0.7));
+    if (cap_hint < 1024) cap_hint = 1024;
     hashmap_t m;
-    if (hashmap_init(&m, n * 2) != 0) {
+    if (hashmap_init(&m, cap_hint) != 0) {
         fprintf(stderr, "hashmap_init failed\n");
-        free(tokens); free(buf); free(input); return 1;
+        free(buf); free(input); return 1;
     }
-    for (size_t i = 0; i < n; i++) {
-        if (hashmap_contains(&stop, tokens[i].ptr, tokens[i].len)) continue;
-        hashmap_increment(&m, tokens[i].ptr, tokens[i].len);
+    fprintf(stderr, "map cap: %zu  (n*2=%zu, rounded up to next pow2)\n", m.cap, n * 2);
+    {
+        size_t i = 0;
+        while (i < len) {
+            while (i < len && buf[i] == '\0') i++;
+            if (i >= len) break;
+            const char *start = buf + i;
+            while (i < len && buf[i] != '\0') i++;
+            size_t tlen = (size_t)(buf + i - start);
+            if (hashmap_contains(&stop, start, tlen)) continue;
+            hashmap_increment(&m, start, tlen);
+        }
     }
     fprintf(stderr, "unique : %zu\n", m.used);
 
@@ -132,8 +145,6 @@ int main(int argc, char **argv)
     for (size_t i = 0; i < 5; i++)
         fprintf(stderr, "[%zu]=%zu ", i, hst.hist[i]);
     fprintf(stderr, "[5+]=%zu\n", hst.hist[5]);
-
-    free(tokens);
 
     size_t k = 25;
     size_t hlen = 0;

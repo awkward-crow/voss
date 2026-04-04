@@ -43,17 +43,116 @@ fn swContains(word: []const u8) bool {
     }
 }
 
+const SwissMap = struct {
+    const G = 16;
+    const empty: u8 = 0x80;
+
+    ctrl: []u8,          // length = cap + G (sentinel group mirrors ctrl[0..G])
+    keys: [][]const u8,
+    vals: []u32,
+    cap: usize,          // power of 2, >= G
+    len: usize,
+    allocator: std.mem.Allocator,
+
+    fn init(allocator: std.mem.Allocator, cap: usize) !SwissMap {
+        const ctrl = try allocator.alloc(u8, cap + G);
+        @memset(ctrl, empty);
+        return .{
+            .ctrl = ctrl,
+            .keys = try allocator.alloc([]const u8, cap),
+            .vals = try allocator.alloc(u32, cap),
+            .cap = cap,
+            .len = 0,
+            .allocator = allocator,
+        };
+    }
+
+    // set ctrl[s] and mirror into sentinel group for wrap-around probes
+    fn setCtrl(self: *SwissMap, s: usize, byte: u8) void {
+        self.ctrl[s] = byte;
+        if (s < G) self.ctrl[self.cap + s] = byte;
+    }
+
+    fn grow(self: *SwissMap) !void {
+        var new = try SwissMap.init(self.allocator, self.cap * 2);
+        for (0..self.cap) |s| {
+            if (self.ctrl[s] == empty) continue;
+            const h = std.hash.Wyhash.hash(0, self.keys[s]);
+            var slot: usize = @as(usize, @truncate(h >> 7)) & (new.cap - 1);
+            while (true) {
+                const g: @Vector(G, u8) = new.ctrl[slot..][0..G].*;
+                const mask: u16 = @bitCast(g == @as(@Vector(G, u8), @splat(empty)));
+                if (mask != 0) {
+                    const s2 = (slot + @as(usize, @ctz(mask))) & (new.cap - 1);
+                    new.setCtrl(s2, @truncate(h));
+                    new.keys[s2] = self.keys[s];
+                    new.vals[s2] = self.vals[s];
+                    new.len += 1;
+                    break;
+                }
+                slot = (slot + G) & (new.cap - 1);
+            }
+        }
+        self.* = new;
+    }
+
+    const Result = struct { value_ptr: *u32, found_existing: bool };
+
+    fn getOrPut(self: *SwissMap, key: []const u8) !Result {
+        if (self.len * 8 >= self.cap * 7) try self.grow();
+        const h = std.hash.Wyhash.hash(0, key);
+        const ctrl_byte: u8 = @as(u8, @truncate(h)) & 0x7F;
+        var slot: usize = @as(usize, @truncate(h >> 7)) & (self.cap - 1);
+        while (true) {
+            const g: @Vector(G, u8) = self.ctrl[slot..][0..G].*;
+            var hits: u16 = @bitCast(g == @as(@Vector(G, u8), @splat(ctrl_byte)));
+            while (hits != 0) {
+                const i: usize = @ctz(hits);
+                hits &= hits - 1;
+                const s = (slot + i) & (self.cap - 1);
+                if (std.mem.eql(u8, self.keys[s], key))
+                    return .{ .value_ptr = &self.vals[s], .found_existing = true };
+            }
+            const empty_mask: u16 = @bitCast(g == @as(@Vector(G, u8), @splat(empty)));
+            if (empty_mask != 0) {
+                const s = (slot + @as(usize, @ctz(empty_mask))) & (self.cap - 1);
+                self.setCtrl(s, ctrl_byte);
+                self.keys[s] = try self.allocator.dupe(u8, key);
+                self.vals[s] = 0;
+                self.len += 1;
+                return .{ .value_ptr = &self.vals[s], .found_existing = false };
+            }
+            slot = (slot + G) & (self.cap - 1);
+        }
+    }
+
+    const Iter = struct {
+        map: *const SwissMap,
+        pos: usize = 0,
+
+        fn next(it: *Iter) ?struct { key: []const u8, val: u32 } {
+            while (it.pos < it.map.cap) {
+                const s = it.pos;
+                it.pos += 1;
+                if (it.map.ctrl[s] != 0x80)
+                    return .{ .key = it.map.keys[s], .val = it.map.vals[s] };
+            }
+            return null;
+        }
+    };
+
+    fn iter(self: *const SwissMap) Iter {
+        return .{ .map = self };
+    }
+};
+
 const C = struct {
     buf: [256]u8 = undefined,
     k: usize = 0,
-    allocator: std.mem.Allocator,
-    map: *std.StringHashMap(u32),
+    map: *SwissMap,
 
-    pub fn init(allocator: std.mem.Allocator, map: *std.StringHashMap(u32)) C {
-        return .{
-            .allocator = allocator,
-            .map = map,
-        };
+    pub fn init(map: *SwissMap) C {
+        return .{ .map = map };
     }
 
     pub fn add(self: *C, s: []const u8) !void {
@@ -69,7 +168,6 @@ const C = struct {
             if (result.found_existing) {
                 result.value_ptr.* += 1;
             } else {
-                result.key_ptr.* = try self.allocator.dupe(u8, word);
                 result.value_ptr.* = 1;
             }
         }
@@ -82,9 +180,9 @@ pub fn main() !void {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var map = std.StringHashMap(u32).init(allocator);
+    var map = try SwissMap.init(allocator, 16384);
 
-    var collector = C.init(allocator, &map);
+    var collector = C.init(&map);
 
     const n = 32;
 
@@ -146,16 +244,33 @@ pub fn main() !void {
 
     const k = 25;
     const Entry = struct { key: []const u8, count: u32 };
-    var entries = try std.ArrayList(Entry).initCapacity(allocator, map.count());
-    defer entries.deinit(allocator);
-    var it = map.iterator();
-    while (it.next()) |e| entries.appendAssumeCapacity(.{ .key = e.key_ptr.*, .count = e.value_ptr.* });
-    std.mem.sort(Entry, entries.items, {}, struct {
-        fn f(_: void, l: Entry, r: Entry) bool {
-            return l.count > r.count;
+
+    // min-heap of k entries ordered by count ascending — the root is the
+    // smallest of the k largest seen so far and gets evicted on a new arrival
+    var heap = std.PriorityQueue(Entry, void, struct {
+        fn order(_: void, l: Entry, r: Entry) std.math.Order {
+            return std.math.order(l.count, r.count);
         }
-    }.f);
-    for (entries.items[0..@min(k, entries.items.len)]) |e| {
+    }.order).init(allocator, {});
+    defer heap.deinit();
+
+    var it = map.iter();
+    while (it.next()) |e| {
+        const entry = Entry{ .key = e.key, .count = e.val };
+        if (heap.count() < k) {
+            try heap.add(entry);
+        } else if (entry.count > heap.peek().?.count) {
+            _ = heap.remove();
+            try heap.add(entry);
+        }
+    }
+
+    // drain ascending, then reverse to get descending order for display
+    var top: [k]Entry = undefined;
+    var top_n: usize = 0;
+    while (heap.removeOrNull()) |e| : (top_n += 1) top[top_n] = e;
+    std.mem.reverse(Entry, top[0..top_n]);
+    for (top[0..top_n]) |e| {
         try stdout.print("{s} - {d}\n", .{ e.key, e.count });
     }
 

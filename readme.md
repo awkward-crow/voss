@@ -4,6 +4,13 @@
 ## dir. `zig`
 
 ### latest
+ - Swiss Table hashmap replaces `std.StringHashMap` for word counts; SIMD group probing reduces branch mispredictions in `getOrPut`
+ - stop words lookup replaced with a comptime-generated open-addressed hash table baked into the binary — zero runtime setup
+ - bitmask SIMD tokenizer: `@bitCast(@Vector(32, bool))` → u32 mask, `@ctz` to jump to token boundaries, eliminating per-byte branches
+ - arena allocator (`std.heap.ArenaAllocator` over `page_allocator`) for all runtime allocation; no per-key free needed
+ - input file read at runtime via argv rather than embedded
+
+### previous
  - word frequency hashmap: collector's `put` method counts tokens into a `StringHashMap(u32)`, with duped keys; map lifetime managed in `main`
  - stop words filtering: embed `stop_words.txt`, parse at startup into a `StringHashMap(void)`; single-letter words also excluded
  - hashmaps passed to collector as pointers (borrowed, not owned)
@@ -68,6 +75,46 @@ tokenisation loop, without going through the collector.
 The practical rule: if a struct calls `init` on something, it should call
 `deinit` on it too (own it). If it receives something already initialised,
 it should hold a pointer and leave cleanup to the caller (borrow it).
+
+### Swiss Table hashmap
+
+`std.StringHashMap` uses Robin Hood open addressing: one control byte per
+slot encoded inline with the data, probing one slot at a time. Each probe
+is a branch — "occupied? matching key?" — whose outcome is unpredictable for
+a large, non-uniform key set.
+
+A Swiss Table separates the metadata from the data. A parallel `ctrl` array
+holds one byte per slot: `0x80` means empty, otherwise the low 7 bits of the
+hash (`h2`). Slots are grouped into 16-byte blocks aligned to SIMD width.
+A lookup loads one group (16 ctrl bytes) into a vector, compares against the
+target `h2` in a single instruction, and gets back a bitmask of candidates:
+
+```zig
+const g: @Vector(16, u8) = self.ctrl[slot..][0..16].*;
+var hits: u16 = @bitCast(g == @as(@Vector(16, u8), @splat(ctrl_byte)));
+```
+
+Only slots with a matching `h2` (false positive rate 1/128) need a full string
+comparison. An empty slot in the group means the key is absent — no further
+probing needed. At 87.5% load the probe almost always resolves in one group.
+
+The hash is split into two parts:
+- `h2 = h & 0x7F` — stored in ctrl, used for SIMD comparison
+- `h1 = h >> 7` — indexes into the table (`h1 & (cap - 1)`)
+
+**Sentinel group** — the ctrl array is allocated `cap + 16` bytes and the
+first 16 bytes are mirrored at `ctrl[cap..]`. This lets the group load near
+the end of the table read past the nominal end without a bounds check, with
+the wrap-around slots correctly reflected.
+
+**Grow** — when `len * 8 >= cap * 7` (87.5% load), a new table of double
+the capacity is allocated, all occupied entries are re-inserted, and
+`self.*` is replaced. With an arena allocator the old arrays are reclaimed
+en masse at program exit rather than individually.
+
+The gain over Robin Hood is modest on small tables (the branch predictor
+warms up quickly for a few thousand keys) but grows with table size and
+access randomness.
 
 
 ## dir. `c`

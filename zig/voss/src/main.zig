@@ -5,18 +5,54 @@ var stdout_buffer: [1024]u8 = undefined;
 var stdout_writer = std.fs.File.stdout().writer(&stdout_buffer);
 const stdout = &stdout_writer.interface;
 
+const sw_size = 512;
+
+fn swHash(s: []const u8) usize {
+    var h: u32 = 2166136261;
+    for (s) |c| { h ^= c; h *%= 16777619; }
+    return h & (sw_size - 1);
+}
+
+const sw_table: [sw_size][]const u8 = blk: {
+    @setEvalBranchQuota(1000000);
+    var t = [_][]const u8{""} ** sw_size;
+    var it = std.mem.splitScalar(u8, @embedFile("stop_words.txt"), ',');
+    while (it.next()) |w| {
+        const word = std.mem.trim(u8, w, "\r\n");
+        var slot = swHash(word);
+        while (t[slot].len != 0) slot = (slot + 1) & (sw_size - 1);
+        t[slot] = word;
+    }
+    const letters = "abcdefghijklmnopqrstuvwxyz";
+    for (0..26) |i| {
+        const word = letters[i .. i + 1];
+        var slot = swHash(word);
+        while (t[slot].len != 0) slot = (slot + 1) & (sw_size - 1);
+        t[slot] = word;
+    }
+    break :blk t;
+};
+
+fn swContains(word: []const u8) bool {
+    var slot = swHash(word);
+    while (true) {
+        const entry = sw_table[slot];
+        if (entry.len == 0) return false;
+        if (std.mem.eql(u8, entry, word)) return true;
+        slot = (slot + 1) & (sw_size - 1);
+    }
+}
+
 const C = struct {
     buf: [256]u8 = undefined,
     k: usize = 0,
     allocator: std.mem.Allocator,
     map: *std.StringHashMap(u32),
-    stop_words: *std.StringHashMap(void),
 
-    pub fn init(allocator: std.mem.Allocator, map: *std.StringHashMap(u32), stop_words: *std.StringHashMap(void)) C {
+    pub fn init(allocator: std.mem.Allocator, map: *std.StringHashMap(u32)) C {
         return .{
             .allocator = allocator,
             .map = map,
-            .stop_words = stop_words,
         };
     }
 
@@ -28,7 +64,7 @@ const C = struct {
     pub fn put(self: *C, s: []const u8) !void {
         @memcpy(self.buf[self.k..][0..s.len], s);
         const word = self.buf[0 .. self.k + s.len];
-        if (!self.stop_words.contains(word)) {
+        if (!swContains(word)) {
             const result = try self.map.getOrPut(word);
             if (result.found_existing) {
                 result.value_ptr.* += 1;
@@ -46,20 +82,9 @@ pub fn main() !void {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var stop_words = std.StringHashMap(void).init(allocator);
-    var sw_it = std.mem.splitScalar(u8, @embedFile("stop_words.txt"), ',');
-    while (sw_it.next()) |w| {
-        try stop_words.put(std.mem.trim(u8, w, "\n"), {});
-    }
-    // add single letter characters
-    const letters = "abcdefghijklmnopqrstuvwxyz";
-    for (letters, 0..) |_, i| {
-        try stop_words.put(letters[i .. i + 1], {});
-    }
-
     var map = std.StringHashMap(u32).init(allocator);
 
-    var collector = C.init(allocator, &map, &stop_words);
+    var collector = C.init(allocator, &map);
 
     const n = 32;
 
